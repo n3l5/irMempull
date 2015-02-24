@@ -53,11 +53,8 @@ Param(
    [string]$toolsDir,
    
    [Parameter(Mandatory=$True)]
-   [string]$dumpDir,
-   
-   [Parameter(Mandatory=$True)]
-   [string]$7zpass
-   
+   [string]$dumpDir
+     
     )
    
 echo "=============================================="
@@ -111,9 +108,6 @@ if ((!(Test-Connection -Cn $target -BufferSize 16 -Count 1 -ea 0 -quiet)) -OR (!
 
 else {
 
-$startTime = Get-Date -format yyyy-MM-dd_HHmm
-Write-host -Foregroundcolor Cyan "-[ Start time: $startTime ]-"
-
 #Determine if Mail Alert is wanted ask for particulars
 if ($mail -like "Y*") {
 	$mailTo = Read-Host "Enter alert TO: email address...multiples should separated with a comma"
@@ -125,34 +119,48 @@ elseif ((!($mail)) -OR ($mail -like "N*")) {
 	}
 
 #Get system info
-	$targetName = Get-WMIObject Win32_ComputerSystem -ComputerName $target -Credential $cred | ForEach-Object Name
-	$targetIP = Get-WMIObject -Class Win32_NetworkAdapterConfiguration -ComputerName $target -Credential $cred -Filter "IPEnabled='TRUE'" | Where {$_.IPAddress} | Select -ExpandProperty IPAddress | Where{$_ -notlike "*:*"}
+	$targetName = Get-WMIObject -class Win32_ComputerSystem -ComputerName $target -Credential $cred | ForEach-Object Name
+	$targetIP = Get-WMIObject -class Win32_NetworkAdapterConfiguration -ComputerName $target -Credential $cred -Filter "IPEnabled='TRUE'" | Where {$_.IPAddress} | Select -ExpandProperty IPAddress | Where{$_ -notlike "*:*"}
 	$mem = Get-WMIObject -class Win32_PhysicalMemory -ComputerName $target -Credential $cred | Measure-Object -Property capacity -Sum | % {[Math]::Round(($_.sum / 1GB),2)} 
-	$expproc = gwmi win32_process -computer $target -Credential $cred -Filter "Name = 'explorer.exe'"
-	$exuser = ($expproc.GetOwner()).user
-	$exdom = ($expproc.GetOwner()).domain
-	$currUser = "$exdom" + "\$exuser"
+	$mfg = Get-WmiObject -class Win32_Computersystem -ComputerName $target -Credential $cred | select -ExpandProperty manufacturer
+	$model = Get-WmiObject Win32_Computersystem -ComputerName $target -Credential $cred | select -ExpandProperty model
+	$pctype = Get-WmiObject Win32_Computersystem -ComputerName $target -Credential $cred | select -ExpandProperty PCSystemType
+	$sernum = Get-wmiobject Win32_Bios -ComputerName $target -Credential $cred | select -ExpandProperty SerialNumber
+	$tmzn = Get-WmiObject -class Win32_TimeZone -Computer $target -Credential $cred | select -ExpandProperty caption
+
+#Display logged in user info (if any)	
+	if ($expproc = gwmi win32_process -computer $target -Credential $cred -Filter "Name = 'explorer.exe'") {
+		$exuser = ($expproc.GetOwner()).user
+		$exdom = ($expproc.GetOwner()).domain
+		$currUser = "$exdom" + "\$exuser" }
+	else { 
+		$currUser = "NONE" 
+	}
 
 echo ""
 echo "=============================================="
-Write-Host -ForegroundColor Magenta "==[ $targetName - $targetIP ]=="
+Write-Host -ForegroundColor Magenta "==[ $targetName - $targetIP"
 
-##Determine x32 or x64
 $arch = Get-WmiObject -Class Win32_Processor -ComputerName $target -Credential $cred | foreach {$_.AddressWidth}
 
 #Determine XP or Win7
 $OSvers = Get-WMIObject -Class Win32_OperatingSystem -ComputerName $target -Credential $cred | foreach {$_.Version}
 	if ($OSvers -like "5*"){
-	Write-Host -ForegroundColor Magenta "==[ Host OS: Windows XP $arch  ]=="
+	Write-Host -ForegroundColor Magenta "==[ Host OS: Windows XP $arch"
 	}
 	if ($OSvers -like "6*"){
-	Write-Host -ForegroundColor Magenta "==[ Host OS: Windows 7 $arch    ]=="
+	Write-Host -ForegroundColor Magenta "==[ Host OS: Windows 7 $arch"
 	}
-	Write-Host -ForegroundColor Magenta "==[ "Total memory size: $mem GB" ]=="
-	Write-Host -ForegroundColor Magenta "==[ Current user: $currUser ]=="
-
-	echo "=============================================="
-	echo ""
+Write-Host -ForegroundColor Magenta "==[ Total memory size: $mem GB"
+Write-Host -ForegroundColor Magenta "==[ Manufacturer: $mfg"
+Write-Host -ForegroundColor Magenta "==[ Model: $model"
+Write-Host -ForegroundColor Magenta "==[ System Type: $pctype"
+Write-Host -ForegroundColor Magenta "==[ Serial Number: $sernum"
+Write-Host -ForegroundColor Magenta "==[ Timezone: $tmzn"
+Write-Host -ForegroundColor Magenta "==[ Current logged on user: $currUser"
+	
+echo "=============================================="
+echo ""
 
 ################
 ##Set up environment on remote system. IR folder for memtools and art folder for memory.##
@@ -163,9 +171,10 @@ $OSvers = Get-WMIObject -Class Win32_OperatingSystem -ComputerName $target -Cred
 
 ##Set up PSDrive mapping to remote drive
 	New-PSDrive -Name X -PSProvider filesystem -Root \\$target\c$ -Credential $cred | Out-Null
-    New-Item -Path $remoteMEMfold -ItemType Directory | Out-Null
-	$irFolder = "C:\Windows\Temp\IR"
-	$remoteMEMfold = "X:\windows\Temp\IR"
+    
+	$remoteMEMfold = "x:\windows\Temp\IR"
+	New-Item -Path $remoteMEMfold -ItemType Directory | Out-Null
+	$irFolder = "C:\windows\Temp\IR"
 	$date = Get-Date -format yyyy-MM-dd_HHmm_
 	
 ##connect and move software to target client
@@ -174,20 +183,41 @@ $OSvers = Get-WMIObject -Class Win32_OperatingSystem -ComputerName $target -Cred
 	Write-Host -ForegroundColor Yellow "  [done]"
 
 #Run MEMDUMP remote
-	$memName = $date + $targetName + "_memDump.7z"
+	$memName = $date + $targetName + "_memDump"
 	$dumpPath = $irFolder+"\"+$memName
-	$memdump = "cmd /c $irFolder\winpmem.exe - | $irFolder\7za.exe a -si -p$passwd -mx1 $dumpPath"
+	$7zPath = $irFolder+"\"+$memName+".7z"
+	$memdump = "cmd /c $irFolder\winpmem.exe $dumpPath" 
+	$compress = "cmd /c $irFolder\7za.exe a -mx1 $7zPath $dumpPath"
 	InVoke-WmiMethod -class Win32_process -name Create -ArgumentList $memdump -ComputerName $target -Credential $cred | Out-Null
 	echo "=============================================="
 	Write-Host -ForegroundColor Magenta ">>>[Memory acquisition started]<<<"
 	echo "=============================================="
+	
+	$time1 = (Get-Date).ToShortTimeString()
+	Write-host -Foregroundcolor Cyan "-[ Start time: $time1 ]-"
+	
+#Monitor the Winpmem process
+	do {(Write-Host -ForegroundColor Yellow "dumping the memory..."),(Start-Sleep -Seconds 180)}
+	until ((Get-WMIobject -Class Win32_process -Filter "Name='winpmem.exe'" -ComputerName $target -Credential $cred | where {$_.Name -eq "winpmem.exe"}).ProcessID -eq $null)
+	Write-Host -ForegroundColor Green "  [done]"
 
-	#Monitor the Winpmem process
-do {(Write-Host -ForegroundColor Yellow "dumping the memory - compressing image..."),(Start-Sleep -Seconds 180)}
-until ((Get-WMIobject -Class Win32_process -Filter "Name='winpmem.exe'" -ComputerName $target -Credential $cred | where {$_.Name -eq "winpmem.exe"}).ProcessID -eq $null)
-Write-Host -ForegroundColor Yellow "  [done]"
+#Start memory capture compress
+InVoke-WmiMethod -class Win32_process -name Create -ArgumentList $compress -ComputerName $target -Credential $cred | Out-Null
 
-###################
+#Monitor the 7za process
+	do {(Write-Host -ForegroundColor Yellow "compressing image..."),(Start-Sleep -Seconds 180)}
+	until ((Get-WMIobject -Class Win32_process -Filter "Name='7za.exe'" -ComputerName $target -Credential $cred | where {$_.Name -eq "7za.exe"}).ProcessID -eq $null)
+	Write-Host -ForegroundColor Green "  [done]"
+
+	
+#Time conversion
+	$time2 = (Get-Date).ToShortTimeString()
+	Write-host -Foregroundcolor Cyan "-[ End time: $time2 ]-"
+	
+	$timeDiff = NEW-TIMESPAN –Start $time1 –End $time2
+	Write-Host "Memory dump process time $timeDiff minutes"
+	
+#################
 ##Package up the data and pull
 ###################
 echo ""
@@ -197,8 +227,9 @@ echo "=============================================="
 echo ""
 
 ##size it up
-$remdumpPath = $remoteMEMfold+"\"+$memName
-$7zsize = "{0:N2}" -f ((Get-ChildItem $remdumpPath | Measure-Object -property length -sum ).Sum / 1GB) + " GB"
+$remDumppath = $remoteMEMfold+"\"+$memName+".7z"
+
+$7zsize = "{0:N2}" -f ((Get-ChildItem $remDumppath | Measure-Object -property length -sum ).Sum / 1GB) + " GB"
 Write-Host -ForegroundColor Cyan "  Image size: $7zsize "
 
 Write-Host -Fore Green "Transfering the image...."
@@ -206,7 +237,7 @@ if (!(Test-Path -Path $irFolder -PathType Container)){
 	New-Item -Path $irFolder -ItemType Directory  | Out-Null
 }
 
-Move-Item $remdumpPath $dumpDir
+Move-Item $remDumppath $dumpDir
 Write-Host -Fore Yellow "  [done]"
 
 ###Delete the remote IR folder 7 tools##
