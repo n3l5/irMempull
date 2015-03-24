@@ -1,4 +1,4 @@
-IR Memoryze pull (irMyzepull)
+IR Memory pull (irMempull)
 
 DESCRIPTION:
 
